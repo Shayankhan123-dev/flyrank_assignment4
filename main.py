@@ -1,6 +1,7 @@
 import os
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, status, Request
+from fastapi import FastAPI, HTTPException, status, Request, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from supabase import create_client, Client
 from pydantic import BaseModel
 
@@ -78,30 +79,42 @@ def public_info():
     """Stage 2: A public endpoint that requires no authentication"""
     return {"message": "Welcome stranger! This info is public."}
 
-@app.get("/protected/profile", status_code=status.HTTP_200_OK)
-def protected_profile(request: Request):
-    """Stage 2 & 3: A protected endpoint that manually verifies the token"""
-    
-    # 1. Extract the Authorization header (Stage 2)
-    auth_header = request.headers.get("Authorization")
-    
-    # Check if header exists and is formatted correctly ("Bearer <token>")
-    if not auth_header or not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Access token required")
-    
-    # Isolate just the token string
-    token = auth_header.split(" ")[1]
-    
-    # 2. Verify the token with Supabase (Stage 3)
+# --- Stage 4: Security Scheme & Middleware ---
+
+security = HTTPBearer()
+
+def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Middleware dependency to extract and verify the JWT."""
+    token = credentials.credentials
     try:
-        # get_user validates the JWT cryptographically on the Supabase server
         user_response = supabase.auth.get_user(token)
-        
-        # If valid, return the user's secure metadata
-        return {
-            "message": "Access granted", 
-            "user": user_response.user
-        }
+        return {"token": token, "user": user_response.user}
     except Exception:
-        # Catches expired, forged, or malformed tokens
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, 
+            detail="Invalid or expired token"
+        )
+
+# --- Stage 4: Protected Routes & Logout ---
+
+@app.get("/protected/profile", status_code=status.HTTP_200_OK)
+def protected_profile(auth_data: dict = Depends(verify_token)):
+    """Protected route using middleware"""
+    return {
+        "message": "Access granted", 
+        "user": auth_data["user"]
+    }
+
+@app.get("/protected/dashboard", status_code=status.HTTP_200_OK)
+def protected_dashboard(auth_data: dict = Depends(verify_token)):
+    """Checkpoint: A second protected route proving the middleware is reusable"""
+    return {"message": "Welcome to the secure dashboard!"}
+
+@app.post("/auth/logout", status_code=status.HTTP_204_NO_CONTENT)
+def logout(auth_data: dict = Depends(verify_token)):
+    """Secure logout endpoint"""
+    try:
+        supabase.auth.sign_out()
+        return
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))

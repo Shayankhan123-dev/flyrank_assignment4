@@ -1,6 +1,6 @@
 import os
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, status, Request
 from supabase import create_client, Client
 from pydantic import BaseModel
 
@@ -69,3 +69,39 @@ def login(credentials: AuthRequest):
     except Exception:
         # If authentication fails, Supabase throws an exception
         raise HTTPException(status_code=401, detail={"error": "Invalid login credentials"})
+    
+
+# --- Stage 2 & 3: Public and Protected Gates ---
+
+@app.get("/public/info", status_code=status.HTTP_200_OK)
+def public_info():
+    """Stage 2: A public endpoint that requires no authentication"""
+    return {"message": "Welcome stranger! This info is public."}
+
+@app.get("/protected/profile", status_code=status.HTTP_200_OK)
+def protected_profile(request: Request):
+    """Stage 2 & 3: A protected endpoint that manually verifies the token"""
+    
+    # 1. Extract the Authorization header (Stage 2)
+    auth_header = request.headers.get("Authorization")
+    
+    # Check if header exists and is formatted correctly ("Bearer <token>")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Access token required")
+    
+    # Isolate just the token string
+    token = auth_header.split(" ")[1]
+    
+    # 2. Verify the token with Supabase (Stage 3)
+    try:
+        # get_user validates the JWT cryptographically on the Supabase server
+        user_response = supabase.auth.get_user(token)
+        
+        # If valid, return the user's secure metadata
+        return {
+            "message": "Access granted", 
+            "user": user_response.user
+        }
+    except Exception:
+        # Catches expired, forged, or malformed tokens
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
